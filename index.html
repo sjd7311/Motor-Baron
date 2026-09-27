@@ -16,6 +16,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
+html,body,button,a,input,select,label,.btn,[data-act]{touch-action:manipulation}
 :root{
   --bg:#e9ece6; --surface:#f6f7f3; --surface2:#dde2da; --ink:#18201b; --muted:#566159; --line:#c9d0c6;
   --accent:#1d5842; --accent-ink:#f2f6f1; --accent-soft:#d3e4da; --brass:#8c6a24;
@@ -137,6 +138,7 @@ input.txt{width:100%}
 .tochoice{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0}.tochoice>div{border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--surface2)}@media (max-width:640px){.tochoice{grid-template-columns:1fr}}
 .checklist{list-style:none;padding:0;margin:6px 0 10px;font-size:13px;line-height:1.7}
 .regexp-in .grid2{grid-template-columns:minmax(0,1fr)}.regexp-in .grid2>*{min-width:0}.regexp-in .row{flex-wrap:wrap}
+.regexp-in table.grid td.tl,.regexp-in table.grid th.tl{white-space:normal}
 @media (min-width:861px){.regexp-in .grid2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .officebox{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
 .dstep{gap:6px;margin-bottom:6px}.dstep .btn{min-width:40px;min-height:36px;font-size:18px}
@@ -733,19 +735,20 @@ function rivalSpec2(style,seg,m){
   const rt=Y<1925?Math.min(5,Math.floor((Y-1900)/5)):Math.min(RD_MAX,5+Math.floor((Y-1925)/9));
   return {segment:seg,chassis,susp,engine,size,gearbox,body,interior,features,quality,rd:{engine:rt,light:rt,rel:rt,coach:rt}};
 }
-function rivalEff(rv,Y){const d=byId(RIVAL_DEFS,rv.id);return d&&d.eff?interp(d.eff,Y):1;}
+function rivalEff(rv,Y){const d=byId(RIVAL_DEFS,rv.id);return (d&&d.eff?interp(d.eff,Y):1)*(rv.owner==='player'&&rv.ceo==='cost'?.92:1);}
 function rivalWage(rv){const d=byId(RIVAL_DEFS,rv.id);return (d&&d.wage)||1;}
 function rivalShip(rv,Y){const d=byId(RIVAL_DEFS,rv.id);return d&&d.foreign?70*costIdx(Y):0;}
 function rivalUnitCost(rm,rv,Y){return (rm.car.materials*matIdx(Y)+rm.car.laborHours*interp(HOURS,Y)*hourlyWage(rv.home,Y)*rivalWage(rv))*rivalEff(rv,Y)*1.15+20*costIdx(Y)+rivalShip(rv,Y);}
 function rivalLaunch(rv,seg,m,announce){
   const spec=rivalSpec(rv.style,seg,m);if(!spec) return;
+  if(rv.owner==='player'&&rv.ceo==='eng'&&spec.rd) Object.keys(spec.rd).forEach(k=>spec.rd[k]=Math.min(RD_MAX,spec.rd[k]+1));
   const Y=yearOf(m);
   const car=computeCar(spec,Y);
   const def=byId(RIVAL_DEFS,rv.id);
   const word=def.words[rv.nameIdx%def.words.length];rv.nameIdx++;
   const name=def.name.split(' ')[0]+' '+word+" '"+String(Math.floor(Y)).slice(2);
   const rm={id:rv.id+'-'+m+'-'+seg,name,seg,spec,car,dy:Y,launchM:m,sales:0};
-  rm.price=Math.round(rivalUnitCost(rm,rv,Y)*rv.markup/5)*5;
+  rm.price=Math.round(rivalUnitCost(rm,rv,Y)*rv.markup*rvPriceMult(rv)/5)*5;
   rv.models=rv.models.filter(x=>x.seg!==seg);
   rv.models.push(rm);
   if(announce){
@@ -768,7 +771,20 @@ function rivalStart(rv,m,announce){
 }
 function rivalFixed(rv,Y){const n=Math.max(1,rv.models.length);const avg=rv.fin.length?rv.fin.slice(-12).reduce((a,f)=>a+f.rev,0)/Math.min(12,rv.fin.length):0;rv.peak=Math.max(rv.peak||0,avg);const age=rv.fin.length;const ramp=Math.min(1,.25+age/40)*(rv.style==='import'?.15:1);const pctF={lux:.15,mid:.07,electric:.09,steam:.09,import:.05}[rv.style]||.045;return .0012*mktRevScale(Y)*n*ramp+pctF*Math.max(avg,.85*rv.peak);}
 function rivalVarCost(rm,rv,Y){return (rm.car.materials*matIdx(Y)+rm.car.laborHours*interp(HOURS,Y)*hourlyWage(rv.home,Y)*rivalWage(rv))*rivalEff(rv,Y)+5*costIdx(Y)+rivalShip(rv,Y);}
-function takeoverPrice(rv){return Math.round((rv.pub?rv.price*rv.shares:(rv.fv||0))*1.35);}
+function rvGrowth(rv){const f=rv.fin;if(f.length<12) return 1;const a=f.slice(-6).reduce((t,x)=>t+x.units,0),b=f.slice(-12,-6).reduce((t,x)=>t+x.units,0);return b>0?a/b:1;}
+function takeoverPremium(rv){const g=rvGrowth(rv);const base=.35+clamp((g-1)*.6,-.13,.13);return clamp(base+hashNoise(rv.id,Math.floor(state.m/3))*.04,.2,.5);}
+function rvBaseValue(rv){if(!rv.pinit&&rv.active) ensureRivalPrices();return rv.pub?rv.price*rv.shares:(rv.fv||0);}
+function takeoverPrice(rv){return Math.round(rvBaseValue(rv)*(1+takeoverPremium(rv)));}
+function ensureRivalPrices(){if(!state||!state.mkt) return;const Y=yearOf(state.m);state.rivals.forEach(rv=>{if(rv.active&&!rv.pinit&&rv.shares){rv.fv=rivalFV(rv,Y);rv.price=+(rv.fv*state.mkt.sent/rv.shares).toFixed(2);rv.pinit=true;}});}
+function antiHint(after,Y){const lim=antiLimit(Y);if(after>lim) return Y>=1914?['bad','The government will not approve a deal this big.']:['bad','This will almost certainly bring a federal antitrust investigation.'];if(after>lim*.85) return ['warn','You would be close to the line. Washington is likely to start asking questions.'];if(after>lim*.6) return ['info','Big enough that Washington may take notice, but no case is likely yet.'];return ['good','Too small for Washington to care about.'];}
+const CEO_TYPES={own:{name:'Keep its current managers',d:'No change. Runs the way it always has.',pay:0},
+ cost:{name:'Hire a cost-cutting CEO',d:'Builds its cars about 8% cheaper.',pay:1},
+ sales:{name:'Hire a sales-minded CEO',d:'Signs dealers twice as fast and builds its reputation.',pay:1},
+ eng:{name:'Hire an engineering CEO',d:'Its new models get one more level of research.',pay:1.2},
+ self:{name:'Run it yourself',d:'No CEO salary. You choose its pricing.',pay:0}};
+function ceoPay(rv,Y){const f=rv.fin.slice(-12);const avg=f.reduce((a,x)=>a+x.rev,0)/Math.max(1,f.length);return Math.max(150*costIdx(Y),.006*avg);}
+const PRICE_POL={budget:{name:'Budget',m:.9},std:{name:'Standard',m:1},prem:{name:'Premium',m:1.12}};
+const rvPriceMult=rv=>rv.owner==='player'&&rv.ceo==='self'?(PRICE_POL[rv.pol||'std']||PRICE_POL.std).m:1;
 function payOutHoldings(rv,perShare,why){const h=state.me&&state.me.hold&&state.me.hold[rv.id];if(!h) return;const amt=h.n*perShare;state.me.cash+=amt;delete state.me.hold[rv.id];addNews('Your '+int(h.n)+' shares in '+rv.name+' were bought out at '+money(perShare)+' each ('+why+'). '+money(amt)+' paid to you.','good');}
 function acquireRival(rv,byId_,m,why){
   const perShare=takeoverPrice(rv)/Math.max(1,rv.shares);
@@ -806,19 +822,20 @@ function updateRivals(m,announce){
       else if(m-cur.launchM>=66+jitter) rivalLaunch(rv,seg,m,announce);
     });
     rv.quiet=false;
-    const broke=rv.owner?false:rv.cash<0;const grow=broke?-.004:(def.grow||.006)*(def.weak?.6:1);
+    const broke=rv.owner?false:rv.cash<0;const grow=broke?-.004:(def.grow||.006)*(def.weak?.6:1)*(rv.owner==='player'&&rv.ceo==='sales'?2:1);
+    if(rv.owner==='player'&&rv.ceo==='sales'&&m%12===0) rv.rep=Math.min(80,rv.rep+1);
     REGIONS.forEach(r=>{
       const cap=r.id===rv.home?.97:(def.focus&&def.focus.includes(r.id))?.9:rv.style==='import'?.35:rv.style==='electric'?(r.urb>=.6?.8:r.urb>=.4?.4:.12):rv.style==='steam'?.7:rv.style==='lux'?(r.inc>=1.1?.75:.3):rv.style==='mid'?.8:.9;
       rv.cov[r.id]=clamp(rv.cov[r.id]+grow,r.id===rv.home?.3:0,cap);
     });
-    if(m%12===0){rv.rep=Math.min(def.weak?45:72,rv.rep+(def.weak?.15:.4));rv.models.forEach(rm=>rm.price=Math.round(rivalUnitCost(rm,rv,Y)*rv.markup/5)*5);}
+    if(m%12===0){rv.rep=Math.min(def.weak?45:72,rv.rep+(def.weak?.15:.4));rv.models.forEach(rm=>rm.price=Math.round(rivalUnitCost(rm,rv,Y)*rv.markup*rvPriceMult(rv)/5)*5);}
   });
 }
 function rivalsFinance(P,m,Y){
   state.rivals.forEach(rv=>{
     if(!rv.active) return;
     let rev=0,vc=0,units=0;rv.models.forEach(rm=>{const n=rm.sales||0;units+=n;rev+=n*rm.price;vc+=n*rivalVarCost(rm,rv,Y);});
-    const g=rivalGovMonth(rv,m,Y);const deal=rev*.18,fix=rivalFixed(rv,Y)*(civHalt(m)?.35:1);const pre=rev-deal-vc-fix+g.pre;rev+=g.rev;
+    const g=rivalGovMonth(rv,m,Y);const deal=rev*.18,fix=rivalFixed(rv,Y)*(civHalt(m)?.35:1);const ceo=rv.owner==='player'&&CEO_TYPES[rv.ceo]&&CEO_TYPES[rv.ceo].pay?ceoPay(rv,Y)*CEO_TYPES[rv.ceo].pay:0;const pre=rev-deal-vc-fix+g.pre-ceo;rev+=g.rev;
     const owned=!!rv.owner;const tax=owned?0:Math.max(0,pre)*taxRate(Y);const net=pre-tax;
     rv.fin.push({m,rev,net,units});if(rv.fin.length>36) rv.fin.shift();
     if(!owned){rv.cash+=net;if(net>0&&rv.cash>0){const div=net*.4;rv.cash-=div;const h=state.me&&state.me.hold&&state.me.hold[rv.id];if(h){const mine=div*h.n/rv.shares;state.me.cash+=mine;h.div=(h.div||0)+mine;}}}
@@ -906,16 +923,18 @@ function stocksMonth(P,m,Y){
   const nw=netWorth();state.me.hist.push(Math.round(nw.total));if(state.me.hist.length>120) state.me.hist.shift();
 }
 /* ================= absorbing and antitrust ================= */
+function absorbEstimate(rv){const Y=yearOf(state.m);const f6=rv.fin.slice(-6);const u=f6.reduce((a,x)=>a+x.units,0)/Math.max(1,f6.length);return Math.round(u*rv.models.reduce((a,rm)=>a+rivalVarCost(rm,rv,Y),0)/Math.max(1,rv.models.length)*.6);}
 function absorbRival(rv,m){
   const Y=yearOf(m);const f6=rv.fin.slice(-6);const u=f6.reduce((a,x)=>a+x.units,0)/Math.max(1,f6.length);
   let dealersAdded=0;
   REGIONS.forEach(r=>{const cov=rv.cov[r.id]||0;if(cov<.02) return;const slots=dealerSlots(r.id,Y);const d=dealerRec(r.id);const add=Math.min(slots-d.n,Math.round(cov*slots*.8));if(add>0){d.n+=add;d.target=Math.max(d.target,d.n);dealersAdded+=add;if(!d.last) d.graceUntil=m+2;d.sat=Math.max(d.sat,50);}
     state.regRep[r.id]=clamp(regRep(r.id)+rv.rep*.15*cov,0,95);});
   const mt=avail(METHODS,m).slice(-1)[0];const lines=clamp(Math.ceil(u/Math.max(1,capPerLine(Y)*mt.cap)),1,30);
+  const inv=Math.round(u*rv.models.reduce((a,rm)=>a+rivalVarCost(rm,rv,Y),0)/Math.max(1,rv.models.length)*.6);state.company.cash+=inv;
   const short=rv.name.split(' ')[0];
   state.factories.push({id:'f'+(state.nextId++),name:REG[rv.home].city+' Works (ex-'+short+')',region:rv.home,lines,method:mt.id,building:false,monthsLeft:0,costLeft:0,pending:[],ship:{mode:'auto',shares:{}},prod:{},last:{}});
   rv.active=false;rv.absorbed=true;rv.owner='player';rv.models=[];REGIONS.forEach(r=>rv.cov[r.id]=0);rv.goneM=m;
-  return {dealersAdded,lines,city:REG[rv.home].city};
+  return {dealersAdded,lines,city:REG[rv.home].city,inv};
 }
 function antiLimit(Y){return interp([[1900,.65],[1904,.5],[1908,.42],[1911,.35],[1914,.33],[1920,.4],[1923,.5],[1929,.55],[1933,.55],[1938,.42],[1946,.45],[1960,.45],[1962,.42],[1970,.42]],Y);}
 function antiMood(Y){return Y<1904?'Relaxed':Y<1914?'Trust-busting':Y<1921?'Strict (Clayton Act)':Y<1933?'Relaxed (pro-business years)':Y<1938?'Relaxed (New Deal industry codes)':Y<1946?'Strict (renewed trust-busting)':Y<1961?'Watchful':'Strict';}
@@ -2112,6 +2131,7 @@ function viewFinance(){
 function bigSpark(vals,w,h){return spark(vals,w||260,h||46);}
 function pctCh(a,b){if(!b) return '';const x=(a/b-1)*100;return '<span class="'+(x>=0?'pos':'neg')+'">'+(x>=0?'▲':'▼')+Math.abs(x).toFixed(1)+'%</span>';}
 function viewStocks(){
+  ensureRivalPrices();
   const Y=yearOf(state.m);const q=state.eq,me=state.me,C=state.company;const nw=netWorth();const px=sharePrice();
   let h='<div class="grid2">';
   // net worth
@@ -2148,7 +2168,7 @@ function viewStocks(){
   h+='<p class="hint">Buying and selling uses your personal cash. A takeover uses company cash and pays a premium over the market price. Companies bought this way keep building cars under their own name, and their profits flow to you.</p>';
   if(privs.length) h+='<h3>Private carmakers</h3><p class="small">Not listed, but your company can buy them outright.</p><div class="tablewrap"><table class="grid"><thead><tr><th class="tl">Company</th><th>Estimated value</th><th>Sales last 12 mo</th><th class="tl"></th></tr></thead><tbody>'+privs.map(rv=>'<tr><td class="tl"><b>'+esc(rv.name)+'</b></td><td class="num">'+money(rv.fv||0)+'</td><td class="num">'+int(rv.fin.slice(-12).reduce((a,x)=>a+x.units,0))+' cars</td><td class="tl"><button class="btn small" data-act="toask" data-id="'+rv.id+'">Buy the company</button></td></tr>').join('')+'</tbody></table></div>';
   h+='</section>';
-  if(subs.length) h+='<section class="panel"><h2>Your subsidiaries</h2><p class="small">Run by their own managers. Their profit or loss goes into your company\'s books each month.</p><div class="tablewrap"><table class="grid"><thead><tr><th class="tl">Company</th><th>Cars sold last mo</th><th>Profit last mo</th><th>Last 12 mo</th><th>Value</th><th></th></tr></thead><tbody>'+subs.map(rv=>{const f=rv.fin[rv.fin.length-1]||{units:0,net:0};const y=rv.fin.slice(-12).reduce((a,x)=>a+x.net,0);return '<tr><td class="tl"><b>'+esc(rv.name)+'</b></td><td class="num">'+int(f.units)+'</td><td class="num '+(f.net<0?'neg':'')+'">'+money(f.net)+'</td><td class="num '+(y<0?'neg':'')+'">'+money(y)+'</td><td class="num">'+money(rv.fv||0)+'</td><td><button class="btn small" data-act="mergesub" data-id="'+rv.id+'" title="Fold it into your company: its cars leave the market, you take its dealers and factory">Absorb</button></td></tr>';}).join('')+'</tbody></table></div></section>';
+  if(subs.length) h+='<section class="panel"><h2>Your subsidiaries</h2><p class="small">Each keeps its own name, cars and dealers. Choose who runs it. Its profit or loss goes into your company\'s books each month.</p><div class="tablewrap"><table class="grid"><thead><tr><th class="tl">Company</th><th>Cars sold last mo</th><th>Profit last mo</th><th>Last 12 mo</th><th>Value</th><th class="tl">Who runs it</th><th></th></tr></thead><tbody>'+subs.map(rv=>{const f=rv.fin[rv.fin.length-1]||{units:0,net:0};const y=rv.fin.slice(-12).reduce((a,x)=>a+x.net,0);return '<tr><td class="tl"><b>'+esc(rv.name)+'</b></td><td class="num">'+int(f.units)+'</td><td class="num '+(f.net<0?'neg':'')+'">'+money(f.net)+'</td><td class="num '+(y<0?'neg':'')+'">'+money(y)+'</td><td class="num">'+money(rv.fv||0)+'</td><td class="tl" style="min-width:170px"><select class="sel" data-chg="subceo" data-id="'+rv.id+'" aria-label="Who runs '+esc(rv.name)+'">'+Object.keys(CEO_TYPES).map(k=>'<option value="'+k+'" '+((rv.ceo||'own')===k?'selected':'')+'>'+CEO_TYPES[k].name+(CEO_TYPES[k].pay?' ('+money(ceoPay(rv,yearOf(state.m))*CEO_TYPES[k].pay)+'/mo)':'')+'</option>').join('')+'</select>'+(rv.ceo==='self'?'<select class="sel" style="margin-top:4px" data-chg="subpol" data-id="'+rv.id+'" aria-label="Pricing for '+esc(rv.name)+'">'+Object.keys(PRICE_POL).map(k=>'<option value="'+k+'" '+((rv.pol||'std')===k?'selected':'')+'>'+PRICE_POL[k].name+' prices</option>').join('')+'</select>':'')+'<div class="small muted" style="white-space:normal">'+(CEO_TYPES[rv.ceo||'own']||CEO_TYPES.own).d+'</div></td><td><button class="btn small" data-act="mergesub" data-id="'+rv.id+'" title="Fold it into your company: its cars leave the market, you take its dealers and factory">Absorb</button></td></tr>';}).join('')+'</tbody></table></div></section>';
   const gone=state.rivals.filter(rv=>rv.absorbed||rv.bankrupt||rv.closed||(rv.owner&&rv.owner!=='player'&&rv.active));
   if(gone.length) h+='<section class="panel"><h3>Mergers and failures</h3><div class="tablewrap"><table class="grid"><tbody>'+gone.map(rv=>'<tr><td class="tl">'+esc(rv.name)+'</td><td class="tl muted">'+(rv.absorbed?'Merged into your company '+dateShort(rv.goneM):rv.bankrupt?'Bankrupt '+dateShort(rv.goneM):rv.closed?'Shut down '+dateShort(rv.goneM):'Part of '+esc((rvById(rootOwner(rv))||{}).name||''))+'</td></tr>').join('')+'</tbody></table></div></section>';
   return h;
@@ -2209,37 +2229,25 @@ function renderModal(){
     body='<h2>'+title+'</h2><p class="muted small">Share price '+money(px)+' · '+int(q.shares)+' shares</p>'+info+'<div class="row"><button class="btn primary" data-act="eqdo" '+(can?'':'disabled')+'>Confirm</button></div>';}
   else if(md.type==='trade'){const rv=rvById(md.id);const me=state.me;const hold=me.hold[rv.id]||{n:0};const buy=md.side==='buy';const fr=md.f||(buy?.25:.5);
     let n,cost,can=true,note='';
-    if(buy){const cap=Math.floor(rv.shares*.49)-hold.n;n=Math.max(0,Math.min(Math.floor(me.cash*fr/(rv.price*1.01)),cap));cost=n*rv.price*1.01;can=n>0;if(cap<=0) note='You already own 49% of '+esc(rv.name)+'. To own more, take it over with your company.';}
+    if(buy){const cap=Math.floor(rv.shares*.49)-hold.n;n=Math.max(0,Math.min(Math.floor(me.cash*fr/(rv.price*1.01)),cap));cost=n*rv.price*1.01;can=n>0;if(cap<=0) note='No shares available to you. You already own 49% of '+esc(rv.name)+', the most one investor can hold. To own more, take it over with your company.';else if(me.cash<rv.price*1.01) note='You don\'t have enough personal cash for even one share ('+money(rv.price*1.01)+'). Company cash can\'t be used here. '+(state.eq&&state.eq.payout>0?'Your dividend pays you each quarter; come back then.':'Set a dividend on your company (Stocks tab) and your share of its profit will be paid to you personally each quarter.');else if(!n) note='That amount doesn\'t buy a single share. Pick a larger share of your cash.';}
     else{n=Math.floor(hold.n*fr);cost=n*rv.price*.99;can=n>0;}
     body='<h2>'+(buy?'Buy':'Sell')+' '+esc(rv.name)+' shares</h2><p class="muted small">'+money(rv.price)+' a share · you own '+int(hold.n)+' · your cash '+money(me.cash)+'</p>'+
       '<div class="field"><label>'+(buy?'How much of your cash to use':'How much of your holding to sell')+'</label><select class="sel" data-chg="mdset" data-k="f">'+(buy?[.1,.25,.5,1]:[.25,.5,1]).map(v=>'<option value="'+v+'" '+(Math.abs(v-fr)<.001?'selected':'')+'>'+Math.round(v*100)+'%</option>').join('')+'</select></div>'+
-      '<p>'+(buy?'Buy':'Sell')+' <b>'+int(n)+'</b> shares for about <b>'+money(cost)+'</b> (1% broker fee included).</p>'+(note?'<p class="small neg">'+note+'</p>':'')+
+      (n?'<p>'+(buy?'Buy':'Sell')+' <b>'+int(n)+'</b> shares for about <b>'+money(cost)+'</b> (1% broker fee included).</p>':'')+(note?'<div class="alert warn"><span class="chip warn">'+(buy?'Can\'t buy':'Note')+'</span><span>'+note+'</span></div>':'')+
       '<div class="row"><button class="btn primary" data-act="tradedo" '+(can?'':'disabled')+'>'+(buy?'Buy':'Sell')+'</button></div>';}
-  else if(md.type==='to'){const rv=rvById(md.id);const cost=takeoverPrice(rv);const hold=state.me.hold[rv.id];const C=state.company;const can=C.cash>=cost;const f=rv.fin.slice(-12);const e=f.reduce((a,x)=>a+x.net,0);const u=f.reduce((a,x)=>a+x.units,0);
-    body='<h2>Buy '+esc(rv.name)+'</h2><p>Your company offers its owners about 35% over what the company is worth today.</p><dl class="kv"><dt>Price</dt><dd><b>'+money(cost)+'</b></dd><dt>Cars sold, last 12 months</dt><dd>'+int(u)+'</dd><dt>Profit, last 12 months</dt><dd class="'+(e<0?'neg':'')+'">'+money(e)+'</dd><dt>Its cash (comes with it)</dt><dd class="'+(rv.cash<0?'neg':'')+'">'+money(rv.cash)+'</dd>'+(hold?'<dt>Paid to you for your '+int(hold.n)+' shares</dt><dd>'+money(hold.n*cost/rv.shares)+'</dd>':'')+'</dl>'+
-      (()=>{const Y=yearOf(state.m);const after=unitsShare12(rv);const lim=antiLimit(Y);const block=after>lim&&Y>=1914;md.block=block;
-        const f6=rv.fin.slice(-6);const u=f6.reduce((a,x)=>a+x.units,0)/Math.max(1,f6.length);const mt=avail(METHODS,state.m).slice(-1)[0];const lines=clamp(Math.ceil(u/Math.max(1,capPerLine(Y)*mt.cap)),1,30);
-        const dl=REGIONS.reduce((a,r)=>a+Math.round((rv.cov[r.id]||0)*dealerSlots(r.id,Y)*.8),0);
-        return '<h3>What to do with it</h3><div class="tochoice"><div><b>Keep it as its own brand</b><p class="small">It keeps its name, models, dealers and managers and keeps competing for buyers. Its profit or loss is added to your books every month.</p></div>'+
-        '<div><b>Absorb it into '+esc(state.company.name)+'</b><p class="small">Its cars disappear from the market, so its buyers look at yours and everyone else\'s. You take over up to '+int(dl)+' of its dealers and its factory in '+REG[rv.home].city+' ('+lines+' idle line'+(lines>1?'s':'')+' for your own models). Merging the two costs about '+money(cost*.05)+' more.</p></div></div>'+
-        '<p class="small">After this deal you would sell about <b>'+pct(after)+'</b> of all new cars in America. '+(block?'<span class="neg">The government will not approve it. Since the Clayton Act of 1914, a deal this big is blocked.</span>':after>lim?'<span class="neg">That is large enough to draw a federal antitrust investigation.</span>':'')+'</p>';})()+
-      (can?'':'<p class="neg small">Your company has '+money(C.cash)+'. Borrow on the Finance tab or raise money by issuing shares.</p>')+
-      '<div class="row"><button class="btn primary" data-act="todo" data-how="keep" '+(can&&!md.block?'':'disabled')+'>Buy and keep the brand</button><button class="btn" data-act="todo" data-how="absorb" '+(can&&!md.block&&C.cash>=cost*1.05?'':'disabled')+'>Buy and absorb</button></div>';}
-  else if(md.type==='gov'){const o=state.gov&&state.gov.offer;const c=o&&govContracts().find(x=>x.id===o.cid);const x=o&&byId(state.models,o.mid);
-    if(!c||!x){body='<h2>No offer</h2><p>This offer has passed.</p>';}
-    else{const Y=yearOf(state.m);const facs=state.factories.filter(f=>!f.building);if(!md.f||!byId(facs,md.f)) md.f=(facs[0]||{}).id;const f=byId(state.factories,md.f);
-      const free=f?f.lines-Object.values(f.prod).reduce((a,p)=>a+p.lines,0)-govLines(f):0;const perLine=f?Math.max(1,Math.round(capPerLine(Y)*meth(f).cap)):1;const need=Math.ceil(o.units/perLine);
-      if(md.l==null||md.l>Math.min(need,free)) md.l=Math.min(need,free);const units=Math.min(o.units,md.l*perLine);
-      const est=f?estimateUnitCost(x,f,state.m):{total:0};const unit=est.mat+est.lab;const price=est.total*1.08;
-      body='<h2>'+esc(c.buyer)+' wants the '+esc(x.name)+'</h2><p>Judged the best '+SEG[c.seg].name.toLowerCase()+' on offer for its '+esc(c.name)+'. The contract runs '+c.months+' months at about '+int(o.units)+' a month. It pays your cost plus 8%, about <b>'+money(price)+'</b> a vehicle.</p>'+
-        '<div class="fields"><div class="field"><label>Build them at</label><select class="sel" data-chg="mdset" data-k="f">'+facs.map(ff=>'<option value="'+ff.id+'" '+(ff.id===md.f?'selected':'')+'>'+esc(ff.name)+'</option>').join('')+'</select></div>'+
-        '<div class="field"><label>Lines to give it</label><select class="sel" data-chg="mdset" data-k="l">'+Array.from({length:Math.max(0,Math.min(need,free))+1},(_,i)=>'<option value="'+i+'" '+(i===md.l?'selected':'')+'>'+i+'</option>').join('')+'</select></div></div>'+
-        '<dl class="kv"><dt>Lines needed for the full order</dt><dd>'+need+' (each builds about '+int(perLine)+' a month)</dd><dt>Free lines at '+esc(f.name)+'</dt><dd>'+free+'</dd><dt>You would build</dt><dd>'+int(units)+' a month</dd><dt>Profit</dt><dd>about '+money((price-unit)*units)+' a month</dd></dl>'+
-        (units<o.units?'<p class="small">'+(units?'The rest of the order':'The order')+' goes to the next-best maker.</p>':'')+
-        '<p class="hint">Contract lines stop building your own cars until the contract ends. Free up lines by taking a model off them, or build new lines.</p>'+
-        '<div class="row"><button class="btn primary" data-act="govdo" '+(md.l>0?'':'disabled')+'>Accept</button><button class="btn" data-act="govno">Decline</button></div>';}}
-  else if(md.type==='ach'){const got=state.ach||{};const life=achLife();const n=Object.keys(got).length;const pts=ACH.filter(a=>got[a.id]!=null).reduce((t,a)=>t+a.pts,0);const tot=ACH.reduce((t,a)=>t+a.pts,0);
-    body='<h2>Achievements</h2><p class="muted small">This game: '+n+' of '+ACH.length+' · '+pts+' of '+tot+' points. Earned in any game on this device: '+Object.keys(life).length+'.</p><div class="achlist">'+ACH.map(a=>{const g=got[a.id]!=null;const l=!!life[a.id];return '<div class="ach '+(g?'got':l?'life':'')+'"><span class="medal"></span><div><b>'+esc(a.name)+'</b> <span class="muted small">'+a.pts+' pts</span><div class="small">'+esc(a.d)+'</div><div class="small muted">'+(g?'Earned '+dateLabel(got[a.id]):l?'Earned in another game':'Not yet')+'</div></div></div>';}).join('')+'</div>';}
+  else if(md.type==='to'){const rv=rvById(md.id);const cost=takeoverPrice(rv);const prem=takeoverPremium(rv);const g=rvGrowth(rv);const hold=state.me.hold[rv.id];const C=state.company;const f=rv.fin.slice(-12);const e=f.reduce((a,x)=>a+x.net,0);const u=f.reduce((a,x)=>a+x.units,0);
+    const Y=yearOf(state.m);const after=unitsShare12(rv);const hint=antiHint(after,Y);md.block=after>antiLimit(Y)&&Y>=1914;
+    const f6=rv.fin.slice(-6);const u6=f6.reduce((a,x)=>a+x.units,0)/Math.max(1,f6.length);const mt=avail(METHODS,state.m).slice(-1)[0];const lines=clamp(Math.ceil(u6/Math.max(1,capPerLine(Y)*mt.cap)),1,30);
+    const dl=REGIONS.reduce((a,r)=>a+Math.round((rv.cov[r.id]||0)*dealerSlots(r.id,Y)*.8),0);const regs=REGIONS.filter(r=>(rv.cov[r.id]||0)>=.05&&!hasDealers(r.id)).map(r=>r.name);
+    const inv=absorbEstimate(rv);const net=cost-Math.max(0,rv.cash);
+    const canKeep=C.cash>=cost&&!md.block,canAbs=C.cash>=cost*1.05&&!md.block;
+    body='<h2>Buy '+esc(rv.name)+'</h2><p>Its owners want about <b>'+Math.round(prem*100)+'%</b> over what the company is worth today'+(g>1.08?', since it is growing and they are in no hurry to sell':g<.92?', a modest premium because its sales are shrinking':'')+'.</p>'+
+      '<dl class="kv"><dt>Price</dt><dd><b>'+money(cost)+'</b></dd><dt>Cars sold, last 12 months</dt><dd>'+int(u)+(g>1.08?' <span class="pos small">growing</span>':g<.92?' <span class="neg small">shrinking</span>':'')+'</dd><dt>Profit, last 12 months</dt><dd class="'+(e<0?'neg':'')+'">'+money(e)+'</dd><dt>Cash on hand (comes with it)</dt><dd class="'+(rv.cash<0?'neg':'')+'">'+money(rv.cash)+'</dd><dt>Real cost after its cash</dt><dd>'+money(net)+'</dd>'+(hold?'<dt>Paid to you for your '+int(hold.n)+' shares</dt><dd>'+money(hold.n*cost/rv.shares)+'</dd>':'')+'</dl>'+
+      '<h3>What to do with it</h3><div class="tochoice"><div><b>Keep the brand</b><p class="small">The '+esc(rv.name.split(' ')[0])+' name, cars and dealers stay the same and keep competing for buyers. Its profit or loss is added to your books every month. Afterwards you can keep its managers, hire a new CEO, or run it yourself.</p></div>'+
+      '<div><b>Absorb it into '+esc(C.name)+'</b><p class="small">The brand is closed. Its unsold cars are sold off (about '+money(inv)+' back to you) and its buyers shop elsewhere, including with you. You take over its factory in '+REG[rv.home].city+' ('+lines+' line'+(lines>1?'s':'')+', ready for your models) and up to '+int(dl)+' of its dealers'+(regs.length?', which gets you into '+regs.slice(0,4).join(', ')+(regs.length>4?' and more':''):'')+'. Merging costs about '+money(cost*.05)+' more.</p></div></div>'+
+      '<div class="alert '+hint[0]+'"><span class="chip '+hint[0]+'">Washington</span><span>After this deal you would sell about <b>'+pct(after)+'</b> of all new cars in America. '+hint[1]+'</span></div>'+
+      (C.cash>=cost?'':'<p class="neg small">Your company has '+money(C.cash)+'. Borrow on the Finance tab or raise money by issuing shares.</p>')+
+      '<div class="row"><button class="btn primary" data-act="todo" data-how="keep" '+(canKeep?'':'disabled')+'>Buy and keep the brand</button><button class="btn" data-act="todo" data-how="absorb" '+(canAbs?'':'disabled')+'>Buy and absorb</button></div>';}
   else if(md.type==='msg'){body='<h2>'+esc(md.title)+'</h2><p>'+esc(md.text)+'</p>';}
   return '<div class="modal-back" data-act="closemodal-bg"><div class="modal" role="dialog" aria-modal="true">'+body+'<div class="row" style="justify-content:flex-end"><button class="btn" data-act="closemodal">Close</button></div></div></div>';
 }
@@ -2291,10 +2299,10 @@ const A={
     ui.toast={title:buy?'Shares bought':'Shares sold',text:t};ui.modal=null;save();render();},
   toask:el=>{ui.modal={type:'to',id:el.dataset.id};render();},
   todo:el=>{const rv=rvById(ui.modal.id);const cost=takeoverPrice(rv);const how=el.dataset.how||'keep';const tot=how==='absorb'?cost*1.05:cost;if(state.company.cash<tot) return;state.company.cash-=tot;acquireRival(rv,'player',state.m,'your takeover');
-    if(how==='absorb'){const r=absorbRival(rv,state.m);addNews(state.company.name+' buys '+rv.name+' for '+money(cost)+' and folds it in: '+r.dealersAdded+' dealers join your network and its '+r.city+' factory ('+r.lines+' lines) is now yours.','good');ui.toast={title:rv.name+' is now part of '+state.company.name,text:'Paid '+money(tot)+'. Its cars are off the market. You gained '+r.dealersAdded+' dealers and a '+r.lines+'-line factory in '+r.city+' with idle lines ready for your models.'};}
+    if(how==='absorb'){const r=absorbRival(rv,state.m);addNews(state.company.name+' buys '+rv.name+' for '+money(cost)+' and folds it in: its stock sold off for '+money(r.inv)+', '+r.dealersAdded+' dealers join your network and its '+r.city+' factory ('+r.lines+' lines) is now yours.','good');ui.toast={title:rv.name+' is now part of '+state.company.name,text:'Paid '+money(tot)+'. Its leftover cars sold for '+money(r.inv)+'. You gained '+r.dealersAdded+' dealers and a '+r.lines+'-line factory in '+r.city+' ready for your models.'};}
     else{addNews(state.company.name+' buys '+rv.name+' for '+money(cost)+'. It keeps its own name and managers.','good');ui.toast={title:'You now own '+rv.name,text:'Paid '+money(cost)+'. Its profits and losses now flow into your books each month. See it under Stocks → Your subsidiaries.'};}
     ui.modal=null;save();render();},
-  mergesub:el=>{const rv=rvById(el.dataset.id);const c=(rv.fv||0)*.05;if(state.company.cash<c){msg('Not enough cash','Merging costs about '+money(c)+'.');return;}state.company.cash-=c;const r=absorbRival(rv,state.m);addNews(rv.name+' is folded into '+state.company.name+': '+r.dealersAdded+' dealers and a '+r.lines+'-line factory in '+r.city+' join you.','good');ui.toast={title:rv.name+' merged in',text:'Cost '+money(c)+'. Gained '+r.dealersAdded+' dealers and a '+r.lines+'-line factory in '+r.city+'.'};save();render();},
+  mergesub:el=>{const rv=rvById(el.dataset.id);const c=(rv.fv||0)*.05;if(state.company.cash<c){msg('Not enough cash','Merging costs about '+money(c)+'.');return;}state.company.cash-=c;const r=absorbRival(rv,state.m);addNews(rv.name+' is folded into '+state.company.name+': its stock sold off for '+money(r.inv)+', and '+r.dealersAdded+' dealers and a '+r.lines+'-line factory in '+r.city+' join you.','good');ui.toast={title:rv.name+' merged in',text:'Cost '+money(c)+'. Leftover cars sold for '+money(r.inv)+'. Gained '+r.dealersAdded+' dealers and a '+r.lines+'-line factory in '+r.city+'.'};save();render();},
 
   dbarjump:()=>{const p=document.getElementById('design-preview');if(p) p.scrollIntoView({behavior:'smooth',block:'start'});},
   dstep:el=>{const r=el.dataset.r;const d=dealerRec(r);d.target=clamp((d.target||0)+(+el.dataset.d),0,dealerSlots(r,yearOf(state.m)));save();render();},
@@ -2372,6 +2380,8 @@ const A={
   'closemodal-bg':(el,e)=>{if(e.target===el){ui.modal=null;render();}}
 };
 const CHG={
+  subceo:el=>{const rv=rvById(el.dataset.id);rv.ceo=el.value;const t=CEO_TYPES[rv.ceo];ui.toast={title:rv.name+': '+t.name.toLowerCase(),text:t.d+(t.pay?' Salary about '+money(ceoPay(rv,yearOf(state.m))*t.pay)+' a month, paid from its profits.':'')};save();render();},
+  subpol:el=>{const rv=rvById(el.dataset.id);rv.pol=el.value;const Y=yearOf(state.m);rv.models.forEach(rm=>rm.price=Math.round(rivalUnitCost(rm,rv,Y)*rv.markup*rvPriceMult(rv)/5)*5);ui.toast={title:rv.name+' pricing: '+PRICE_POL[rv.pol].name,text:'Its car prices have been reset.'};save();render();},
   mdset:el=>{const v=el.value;ui.modal[el.dataset.k]=isNaN(+v)?v:+v;render();},
   eqpayout:el=>{state.eq.payout=+el.value;save();render();},
   impfile:el=>{const f=el.files&&el.files[0];if(!f) return;const rd=new FileReader();rd.onload=()=>{const t=document.getElementById('imp-text');if(t) t.value=rd.result;A.doimport();};rd.readAsText(f);},
@@ -2418,7 +2428,7 @@ else start((window.claude&&window.claude.hot&&window.claude.hot.data)||{});
 
 <script>
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js?v=20260927094224');
+  navigator.serviceWorker.register('sw.js?v=20260927102500');
 }
 </script>
 </body>
